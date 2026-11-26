@@ -52,7 +52,16 @@ RTF（Real-Time Factor）＝ 合成耗時 ÷ 產出音訊長度，**低於 1 才
   曾觀察到一次 CosyVoice 3 載入 88 秒，之後重現不出來，原因未定案。
 * **合成時間不受 page cache 影響**，權重載完就常駐顯存。但每個 process 的第 1 次合成都比較貴：
   F5 是 1.24s（穩態 0.92s），**CosyVoice 3 是 8.71s（穩態 3.0–3.4s），多 5.5 秒**。
-  `_load_f5()` 載入後有一次預熱合成把這段吃掉，`_load_cosyvoice()` 目前沒有。
+  `_load_f5()` 與 `_load_cosyvoice()` 載入後都有一次預熱合成，把這段吃掉。
+* **CosyVoice 聲紋快取**：同一支參考音（加上 `COSY_INSTRUCT`）第一次合成時用 `add_zero_shot_spk` 註冊聲紋，
+  之後每次 `inference_instruct2` 帶 `zero_shot_spk_id`，不再重算參考音的特徵。
+  註冊時第一個參數放的是 `COSY_INSTRUCT`，不是參考音逐字稿：CosyVoice（commit 074ca6d）用了 spk_id 就沿用註冊時存的 prompt_text，
+  instruct2 也走這條路，放逐字稿會讓情感指令失效。換參考音就會多註冊一個聲紋，測試在 `test_engine_cache.py`。
+* **聲紋快取的實測**（2026-11-26，RTX 4060 Laptop、`fp16` 沒開，`voice_loop.py` 有開所以數字不能直接比、
+  參考音 `glitch-vn/voice-ref/glitch.wav`、`/api/tts` 本機直連、輸入 23 字「今天的直播先從視覺小說開始，大家都準備好了嗎？」）：
+  丟掉第 1 次後的 4 次，沒快取 4.06 / 4.10 / 4.39 / 4.56s（中位 4.25s），有快取 3.27 / 3.30 / 3.54 / 3.78s（中位 3.42s），
+  約快 0.8 秒。音長 4.6–5.7s，RTF 約 0.7，離 2.5 秒內的預期還有距離，CosyVoice 3 的耗時主要跟輸出音長成正比。
+  第 1 次請求含模型載入：沒快取 115.6s（剛重裝，磁碟冷啟動），有快取 24.4s（載入 18.8s 加預熱）。
 * CosyVoice 3 底層是 LLM 取樣，**同一句話每次產出的音長都不同**（實測 4.00–4.84s），RTF 只能看區間；
   F5 是 flow matching，五次跑出來都是 4.70s 分毫不差。
 * 兩顆同時常駐約 5.8 GB，8 GB 卡塞得下但不寬。
