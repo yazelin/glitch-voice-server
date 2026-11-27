@@ -4,6 +4,7 @@
 1. F5-TTS v1 Base (官方 Emilia 中英底模)：極速超低延遲 (~1.2s, RTF=0.25)。
 2. CosyVoice 3 (原生 Instruct 0.5B)：極致細膩少女聲線與自然呼吸感。
 """
+import hashlib
 import io
 import os
 import sys
@@ -94,9 +95,25 @@ class GlitchTTSEngine:
         try:
             ref = str(COSY_REF_WAV) if COSY_REF_WAV.exists() else self.ref_wav
             list(self.cosyvoice.inference_instruct2(
-                "連線就緒", COSY_INSTRUCT, ref, stream=False, speed=1.0))
+                "連線就緒", COSY_INSTRUCT, ref,
+                zero_shot_spk_id=self._cosy_spk_id(ref), stream=False, speed=1.0))
         except Exception:
             pass
+
+    def _cosy_spk_id(self, ref_wav: str) -> str:
+        """同一支參考音（加上 COSY_INSTRUCT）只註冊一次聲紋，之後直接沿用 id。
+
+        CosyVoice 用了 spk_id 就沿用註冊時存的 prompt_text，instruct2 也一樣，
+        所以註冊時第一個參數放 COSY_INSTRUCT，不放參考音逐字稿。
+        """
+        cache = self.__dict__.setdefault("_cosy_spk_ids", {})
+        key = (str(ref_wav), COSY_INSTRUCT)
+        spk_id = cache.get(key)
+        if spk_id is None:
+            spk_id = "spk_" + hashlib.sha1(repr(key).encode("utf-8")).hexdigest()[:16]
+            self.cosyvoice.add_zero_shot_spk(COSY_INSTRUCT, str(ref_wav), spk_id)
+            cache[key] = spk_id
+        return spk_id
 
     def set_engine(self, engine_name: str) -> str:
         with self._lock:
@@ -126,10 +143,12 @@ class GlitchTTSEngine:
                 self._load_cosyvoice()
                 if target_voice == DEFAULT_WAV.stem and COSY_REF_WAV.exists():
                     ref_wav = str(COSY_REF_WAV)   # 預設音色沿用 glitch-vn 那支較乾淨的參考音
+                spk_id = self._cosy_spk_id(ref_wav)
                 gen = self.cosyvoice.inference_instruct2(
                     text,
                     COSY_INSTRUCT,
                     ref_wav,
+                    zero_shot_spk_id=spk_id,
                     stream=False,
                     speed=speed
                 )
